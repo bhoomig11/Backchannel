@@ -211,13 +211,26 @@ library, with no central master. @fig-topology shows the path of one request.
   + The library retries at the leader and remembers it for later requests to the group.
 ]
 
+== Concepts
+
+- *Chat server.* The chat app's backend. It serves the app's users and is the store's client.
+- *Channel.* A named conversation for one production line, shift or team, identified by an id
+  such as `line-3`. It has a message history and a topic.
+- *Message.* One post in a channel, with its sender, its text, and an id unique across the
+  system. A channel's history is the ordered sequence of its messages; posting adds a message
+  to the end.
+- *Topic.* A short line describing a channel's current state, such as "Line 3 on hold for
+  inspection". Setting a topic replaces the old one.
+
 == Data model and client API
 
-- The store's clients are the chat app's servers, which use the client library on behalf of crew
-  members. Each chat server runs many clients, one per worker; each client has a unique id and
-  at most one outstanding request.
-- Keys and values are strings. Chat keys: `channel/<id>/msgs` (message history) and
-  `channel/<id>/topic`, with channel ids such as `line-3` or `shift-b`.
+- Each chat server runs many clients of the store, one per worker. Each client has a unique id
+  and at most one outstanding request.
+- Keys and values are strings. A channel's history is stored at `channel/<id>/msgs` and its
+  topic at `channel/<id>/topic`.
+- Each message is stored as a self-delimiting record carrying its sender, text and id, so a
+  stored history parses back into its messages. A message's id is the (client id, sequence
+  number) of the request that posted it.
 - Operations:
   - `Append(k, v)` sets `k` to its current value followed by `v`; a missing key counts as empty.
     Posting a message is an `Append` to the channel's `msgs` key.
