@@ -1,162 +1,447 @@
-// Project plan report. Build: typst compile plan-report.typ (from final_project/).
+// Project plan report. Build: typst compile plan-report.typ (from the repo root).
 // Red TODO marks are undecided items; remove the todo() calls before submitting.
 
-#let title = "TODO: Project Title"
+#import "@preview/cetz:0.5.3"
+
+#let title = "Backchannel: Sharded, Raft-Replicated Storage for Chat"
 #let members = ("Rishiraj Dhar", "Bhoomika Gupta")
-#let team = "TODO"
+#let team = "5"
 
 #let todo(body) = text(fill: red)[*TODO:* #body]
+#let suggest(body) = text(fill: blue)[*Suggestion:* #body]
+
+// One hue: shades of a single blue; elements differ by lightness and dash only.
+#let accent = rgb("#1f5f9e")
+#let redirect = accent
+#let raft-ink = accent.lighten(55%)
+#let group-fill = accent.lighten(94%)
+#let group-ink = accent.lighten(60%)
+#let server-fill = group-fill
+#let server-ink = group-ink
+// Circled step number; its box is cap-height tall so it never changes line spacing.
+#let step(n) = box(width: 1.2em, height: 0.7em, place(center + horizon,
+  circle(radius: 0.58em, inset: 0pt, stroke: 0.5pt + black,
+    align(center + horizon, text(0.8em, str(n))))))
 
 #set document(title: title, author: members)
-#set page(paper: "us-letter", margin: 1in)
+#set page(
+  paper: "us-letter",
+  margin: 1in,
+  numbering: "1",
+  header: {
+    set text(size: 9pt)
+    grid(
+      columns: (1fr, auto, 1fr),
+      align(left)[CS 6650 Fall 2026], [Final Project Plan], align(right)[November 12, 2026],
+    )
+  },
+  footer: context align(center, text(size: 9pt)[
+    Page #counter(page).display() of #counter(page).final().first()
+  ]),
+)
 #set text(font: "New Computer Modern", size: 11pt)
 #set par(leading: 0.65em, spacing: 1.2em, justify: true)
 #set list(indent: 0.5em)
 #set enum(indent: 0.5em)
-#show heading.where(level: 2): set block(above: 1.4em, below: 0.8em)
+#show heading.where(level: 1): set block(above: 1.4em, below: 0.8em)
+#show figure.caption: set text(size: 9.5pt)
 
 #align(center)[
   #text(size: 16pt, weight: "bold")[#title] \
   #v(0.3em)
-  CS 6650 Project Plan · Team #team \
-  #members.join(", ") · November 2026
+  Team #team #sym.dot.c #members.join(", ")
 ]
 
-== Overview
+= Overview
 
-A sharded, fault-tolerant key-value store in C++17, run on the Khoury Linux cluster.
+The robot business has recovered from the downturn and every factory is back in production,
+running around the clock in shifts. The crews coordinate over an in-house chat app. Engineers
+use it to flag defects and call quality holds, and admins use it to schedule maintenance with
+the line crews. Shift handovers also happen over chat, so that is when traffic peaks. There is
+a channel for each production line, shift and team, which comes to about a thousand channels.
 
-- Keys are partitioned across a fixed set of *shard groups* by hashing.
+The chat app's servers keep all of its messages on a single storage server. It can no longer keep up at handover, and
+when it crashes, every line loses coordination at the same time. To fix this, the business is
+moving the chat app onto Backchannel, a new storage backend: a key-value store, sharded across
+groups of servers, each group replicated with Raft.
+
+- Each channel's message history is one key: a post appends to it, and a load reads it.
+- Channels are spread across a fixed set of shard groups by hashing.
 - Each shard group is replicated across 3 servers with Raft.
-- Clients see a single store with `Put(key, value)` and `Get(key)`; the client library hides
-  the shard layout.
-- There is no central master: any server redirects a request to the group that owns the key,
-  and followers redirect to their group's leader.
+- The chat app's servers see one store, where they post, load channels and set topics.
+- The client library hides the shard layout and sends each request to the owning group.
+- Instead of a central master directing clients, a follower redirects each request to its leader.
 
-== Goals
+= Goals
 
-- *Sharding:* spread data and requests across multiple shard groups.
-- *Replication and failover:* each group keeps serving while a majority of its replicas is up.
-- *Linearizable operations:* `Put` and `Get` behave as if executed one at a time on a single
-  copy, including across leader changes.
-- *Exactly-once writes:* a client retrying a request after a timeout never causes it to be
-  applied twice.
-- *Crash recovery:* a crashed server restarts from its persisted log and rejoins its group.
+Together, the primary goals let the chat app use Backchannel as if it were one storage server,
+without that server's limits. Evaluation tests each goal with one experiment, in the same order.
 
-Out of scope for this plan: distributed transactions and cross-shard operations; moving shards
-between groups or changing membership at runtime (a possible later extension); snapshots and
-log compaction #todo[confirm].
+== Primary goals
 
-== Assumptions
+- *Replication and failover.* Each group keeps serving while a majority of its three replicas is
+  up, and a leader failure costs only the time it takes to elect a new one.
+- *Crash recovery.* A crashed server restarts from its persisted log and catches up with its
+  group, and no acknowledged write is lost, even if all three replicas crash at once.
+- *Exactly-once writes.* A request retried after a timeout takes effect only once, even if the
+  server applied it and only the reply was lost.
+- *Linearizable operations.* Every operation acts as if run one at a time on a single copy, even
+  across leader changes, so a read never misses a write acknowledged before it started.
+- *Sharding.* Shard groups split the keys and their load, so throughput grows with the number
+  of groups instead of being bounded by a single server.
 
-- *Failures:* crash-recover, non-Byzantine. With 3 replicas, each group tolerates 1 server down
-  at a time.
-- *Network:* messages may be lost, delayed, or reordered. A partition inside a group is
-  tolerated: the majority side keeps making progress and the minority cannot commit. A client
-  that cannot reach a majority of the owning group times out; this is accepted.
-- *Configuration:* the server list and the key-to-group map are fixed at startup and known to
-  every server.
-- *Clients:* each client has a unique id and at most one outstanding request.
-- *Workload and users:* #todo[who issues requests, how many clients, read/write mix, key
-  distribution (uniform or skewed)].
+== Stretch goal
 
-== Design
+- *Batching.* The leader sends several log entries per replication round and disk write.
+  Measure its effect on throughput and latency, and check that histories stay linearizable.
 
-=== Routing
+#block(breakable: false)[
+== Out of scope and future work
 
-- The key-to-group map is a fixed hash function over the keys.
-- A client sends a request to any server. A server outside the owning group replies with a
-  redirect to that group; a follower replies with a redirect to its leader. The client follows
-  redirects and retries on timeout.
-- No separate master: routing is folded into the servers, so there is no single point of
-  failure in front of the shard groups.
+- *Snapshots and log compaction.* Bounding log size and restart time.
+- *Cross-shard transactions.* Atomic writes across shard groups, using two-phase commit.
+- *Resharding and membership changes.* Moving shards and servers at runtime.
+- *Pipelined replication.* Several replication rounds in flight per follower.
+]
 
-=== Replication (per shard group)
+= Assumptions
 
-- Standard Raft: leader election (`RequestVote`), log replication (`AppendEntries`), commit on
-  majority.
-- `Put` is appended to the leader's log and applied to the key-value map after it commits.
+- *Failures.* Crash-recover, non-Byzantine. Any number of servers may crash at the same time.
+- *Network.* Messages may be lost, delayed, duplicated, reordered or cut off by partitions.
+- *Storage.* Each server's disk is local to its machine and survives a process crash.
+- *Workload.* Simulated chat servers run closed-loop clients (each sends its next request once
+  the last one completes), choosing channels uniformly from 1,000. Two operation mixes:
+  - *Update-heavy.* 50% loads, 50% posts, maximizing interleaved reads and writes.
+  - *Read-mostly.* 95% loads, 5% posts, stressing the read path.
 
-=== Linearizable reads
+= Design
+
+Backchannel splits keys across independent Raft groups and routes requests in the client
+library, with no central master. @fig-topology shows the path of one request.
+
+#figure(
+  cetz.canvas(length: 1mm, {
+    import cetz.draw: *
+    // Spacing ladder (mm): every gap, padding and margin is one of these.
+    let sp(n) = { assert(n in (1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64)); n }
+    let fs = 10.5pt
+    let lfs = 9.5pt
+    let lr = 2.5
+    let cap = fs * 0.7 / 1mm
+    let thin = 0.5pt
+    let mid = 0.75pt
+    let heavy = 1pt
+    let r = 3
+    let node(pos, leader, rad: r, size: fs) = {
+      circle(pos, radius: rad, stroke: mid + accent, fill: if leader { accent } else { white })
+      content(pos, text(size, fill: if leader { white } else { accent }, if leader [L] else [F]))
+    }
+    let label(pos, anchor, body, size: fs) = content(pos, anchor: anchor, text(size, body))
+    let arrow(a, b, paint, dash: none) = line(a, b, mark: (end: ">", fill: paint, scale: 0.9),
+      stroke: (paint: paint, thickness: heavy, dash: dash))
+
+    // Shard groups: three replicas each, a vertical edge facing the chat server.
+    let pad = sp(4)
+    let edge = sp(12)
+    let reach = 10
+    let pw = 2 * pad + 2 * r + reach
+    let ph = 2 * pad + 2 * r + edge
+    let srv-right = pw
+    let lib = (pad, pw - pad)
+    let px = srv-right + sp(64)
+    let stride = ph + sp(2) + cap + sp(4)
+    let top(g) = -g * stride
+    let pts(g) = {
+      let y = top(g) - pad - r
+      ((px + pad + r, y), (px + pad + r, y - edge), (px + pad + r + reach, y - edge / 2))
+    }
+    let leaders = (2, 1, 0)
+    for g in range(3) {
+      rect((px, top(g)), (px + pw, top(g) - ph), stroke: thin + group-ink, fill: group-fill)
+      label((px, top(g) + sp(2)), "base-west", [Shard group #g])
+      let p = pts(g)
+      for (i, j) in ((0, 1), (1, 2), (2, 0)) { line(p.at(i), p.at(j), stroke: thin + raft-ink) }
+      for i in range(3) { node(p.at(i), i == leaders.at(g)) }
+    }
+
+    // Chat servers (a stacked copy behind), each layer the size of a shard group panel,
+    // with a client library module inside.
+    let (f, l, _) = pts(1)
+    let srv = (0, srv-right, top(1), top(1) - ph)
+    let lib-top = srv.at(2) - pad
+    let lib-bot = srv.at(3) + pad
+    rect((srv.at(0) + sp(2), srv.at(2) - sp(2)), (srv.at(1) + sp(2), srv.at(3) - sp(2)),
+      stroke: thin + server-ink, fill: server-fill)
+    rect((srv.at(0), srv.at(2)), (srv.at(1), srv.at(3)), stroke: thin + server-ink, fill: server-fill)
+    rect((lib.at(0), lib-top), (lib.at(1), lib-bot), stroke: thin + server-ink, fill: white, name: "lib")
+    content("lib", align(center, text(fs)[Client \ library]))
+    label((srv.at(0), srv.at(2) + sp(2)), "base-west", [Chat server])
+
+    // Routing exchange with group 1: request to a follower, redirect, retry at the leader.
+    let off = sp(2)
+    let hit = calc.sqrt(r * r - off * off)
+    let tx = srv.at(1) + sp(2) + sp(4)
+    arrow((lib.at(1), f.at(1) + off), (f.at(0) - hit, f.at(1) + off), accent)
+    label((tx, f.at(1) + off + sp(2)), "south-west", [#step(1) `Append(k, v)`])
+    arrow((f.at(0) - hit, f.at(1) - off), (lib.at(1), f.at(1) - off), redirect, dash: "dashed")
+    label((tx, f.at(1) - off - sp(2)), "north-west", [#step(2) `NOT_LEADER`, hint])
+    arrow((lib.at(1), l.at(1)), (l.at(0) - r, l.at(1)), accent)
+    label((tx, l.at(1) - sp(2)), "north-west", [#step(3) retry at leader])
+
+    // Legend, beside group 0.
+    let row = sp(8)
+    let ly = top(0) - ph / 2 + row
+    let lx = (0, 40)
+    let key(x, y, sym, body) = { sym; label((x + 8 + sp(2), y), "west", body, size: lfs) }
+    key(lx.at(0), ly, node((lx.at(0) + 4, ly), true, rad: lr, size: lfs), [Leader])
+    key(lx.at(0), ly - row, node((lx.at(0) + 4, ly - row), false, rad: lr, size: lfs), [Follower])
+    key(lx.at(0), ly - 2 * row, line((lx.at(0), ly - 2 * row), (lx.at(0) + 8, ly - 2 * row),
+      stroke: thin + raft-ink), [Raft traffic])
+    key(lx.at(1), ly, arrow((lx.at(1), ly), (lx.at(1) + 8, ly), accent), [Request])
+    key(lx.at(1), ly - row, arrow((lx.at(1) + 8, ly - row), (lx.at(1), ly - row), redirect,
+      dash: "dashed"), [Redirect reply])
+  }),
+  caption: [Backchannel topology, with the routing of one request.],
+) <fig-topology>
+
+#block(breakable: false)[
+  #set enum(numbering: n => step(n))
+  + The library hashes the key to group 1 and sends `Append(k, v)` to a member, here a follower.
+  + The follower is not the leader, so it replies `NOT_LEADER` with the leader as a hint.
+  + The library retries at the leader and remembers it for later requests to the group.
+]
+
+== Data model and client API
+
+- The store's clients are the chat app's servers, which use the client library on behalf of crew
+  members. Each chat server runs many clients, one per worker; each client has a unique id and
+  at most one outstanding request.
+- Keys and values are strings. Chat keys: `channel/<id>/msgs` (message history) and
+  `channel/<id>/topic`, with channel ids such as `line-3` or `shift-b`.
+- Operations:
+  - `Append(k, v)` sets `k` to its current value followed by `v`; a missing key counts as empty.
+    Posting a message is an `Append` to the channel's `msgs` key.
+  - `Get(k)` returns the value, or `NOT_FOUND`. Loading a channel is a `Get` of its `msgs` key.
+  - `Put(k, v)` sets `k` to `v`. Setting a channel's topic is a `Put` to its `topic` key.
+- Request fields: client id, sequence number, operation, key, value.
+- Reply fields: status (`OK`, `NOT_FOUND`, `WRONG_GROUP`, `NOT_LEADER`), value, group id of the
+  replying server, and a hint (a server id to retry at).
+
+== Routing
+
+- Each key belongs to one shard group, chosen by a hash of the key that spreads keys evenly
+  across groups. Every process, clients included, computes it the same way from the shared
+  config.
+- The client library sends a request to the owning group: to the last leader it saw there, or
+  else to any member. A follower replies `NOT_LEADER` with its current leader as the hint (or
+  none during an election). The client follows the hint, and on timeout retries the next
+  server of the group.
+- A server outside the owning group replies `WRONG_GROUP`. This only happens if a client's
+  config disagrees with the servers', so it fails fast instead of serving the wrong key.
+
+== Replication (per shard group)
+
+- Standard Raft @raft[Fig. 2]: leader election (`RequestVote`), log replication
+  (`AppendEntries`), commit on majority. Each group runs its own Raft instance; groups share
+  nothing.
+- `Put` and `Append` are appended to the leader's log and applied to the key-value map after
+  they commit (@fig-paths, top).
+- A group without a majority stops serving its keys rather than risk returning stale data.
+  Other groups are unaffected, and the group resumes once a majority restarts.
+
+#figure(
+  cetz.canvas(length: 1cm, {
+    import cetz.draw: *
+    let xs = (0, 5, 10)
+    let names = ([Client], [Leader], [Followers (#sym.times;2)])
+    for i in range(3) {
+      content((xs.at(i), 0.4), text(9pt, weight: "bold", names.at(i)))
+      line((xs.at(i), 0), (xs.at(i), -10.4), stroke: (paint: gray, dash: "dashed"))
+    }
+    let arr = (end: ">", fill: black)
+    let msg(y, a, b, label) = {
+      line((xs.at(a), y), (xs.at(b), y), mark: arr)
+      content(((xs.at(a) + xs.at(b)) / 2, y + 0.27), text(8.5pt, label))
+    }
+    let note(y, i, body) = content((xs.at(i), y), box(fill: white, inset: 2pt, text(8.5pt, body)))
+    let section(y, body) = content((-0.9, y), anchor: "east", text(9pt, style: "italic", body))
+
+    section(-0.6, [Write])
+    msg(-0.6, 0, 1, [`Append(k, v)`, client id, seq])
+    note(-1.3, 1, [append to log, persist])
+    msg(-2.0, 1, 2, [`AppendEntries`])
+    note(-2.6, 2, [append, persist])
+    msg(-3.2, 2, 1, [ack])
+    note(-3.9, 1, [majority: commit, apply (dedup check)])
+    msg(-4.6, 1, 0, [`OK`])
+
+    section(-5.8, [Read])
+    msg(-5.8, 0, 1, [`Get(k)`])
+    note(-6.5, 1, [readIndex #sym.arrow.l commitIndex])
+    msg(-7.2, 1, 2, [heartbeat])
+    msg(-7.9, 2, 1, [ack])
+    note(-8.6, 1, [still leader; wait until applied #sym.gt.eq readIndex])
+    msg(-9.3, 1, 0, [value])
+  }),
+  caption: [Write and read paths in one group. Writes are acknowledged only after they commit
+    on a majority and are applied. A read is served by the leader without a log entry, after a
+    majority confirms it is still leader, so a deposed leader cannot return stale data.],
+) <fig-paths>
+
+== Linearizable reads
 
 - A new leader appends a no-op entry at the start of its term, so it learns which entries are
   committed.
-- On `Get`, the leader records its commit index, confirms it is still leader by a heartbeat
-  round acknowledged by a majority, waits until it has applied up to the recorded index, then
-  reads the map. (Raft paper §8.)
+- `Get` follows the read-index protocol @raft[Sec. 8], shown in @fig-paths: no log entry, but one
+  heartbeat round per read.
 
-=== Exactly-once writes
+== Exactly-once writes
 
 - Each request carries (client id, sequence number), and log entries carry them too.
-- The state machine keeps a table: client id → (last applied sequence number, its reply).
+- The state machine keeps a table: client id #sym.arrow.r (last applied sequence number, its reply).
 - The check happens when a committed entry is applied: a duplicate is skipped and the stored
   reply is returned. Every replica applies the same log in the same order, so all replicas
   build the same table, and a new leader has it.
 - The leader replies to the client once the entry at its assigned index is applied.
 
-=== Persistence
+== Persistence
 
-- One append-only log file per server, holding tagged records: term/vote records, and entry
-  records carrying the entry's term, client id, sequence number, and operation.
-- On a log conflict, the file is truncated at the first conflicting entry and the leader's
-  entries are appended.
-- State is written to disk before the server responds to an RPC (Raft Figure 2).
-- On restart, the server replays the file to rebuild its term, vote, log, key-value map, and
-  dedup table.
-- The exact record format will be settled during implementation. Known risks: a crash between
-  truncation and the following write must not lose the latest term/vote; torn writes must be
-  detected on replay; replay time grows with the log.
+- Each server keeps its term, vote and log on its machine's local disk, and makes every change
+  durable (fsync) before answering any RPC @raft[Fig. 2].
+- On restart, the server rebuilds its term, vote, log, key-value map and dedup table from what
+  it persisted.
+- Known risks: a crash while the log is being rewritten after a conflict must not lose the
+  latest term or vote; partially written records must be detected on restart; restart time
+  grows with the log, since there are no snapshots.
 
-== Modules
+== Configuration and timing
 
-- *Raft server:* `RequestVote`, `AppendEntries`, elections, commit tracking.
-- *Request handler:* `Put`/`Get`, redirects, read path, replying once an entry is applied.
-- *State machine:* key-value map (`std::map`) plus the dedup table.
-- *Persistent log:* append, truncate, and replay of the log file.
-- *Client library:* `Put(K, V)` and `Get(K)`; sequence numbers, retries, following redirects.
-- #todo[workload generator / test harness, failure injection, if separate modules]
+- The server list and the key-to-group map are fixed at startup. One config file, shared by all
+  processes, servers and clients alike, lists each server's id, group, host and port.
+- Election timeout randomized in 250--500 ms; heartbeat every 50 ms; client request timeout 1 s.
 
-== Evaluation
+= Modules
 
-=== Sharding
+All modules are written in C++17.
 
-- Vary the number of shard groups from 1 to 3 and measure throughput; expect throughput to rise.
-- Latency is expected to stay about the same, since per-entry Raft work dominates, or rise
-  slightly from redirect hops.
-- Servers stamp each response with their group id, and the client reports the number of keys
-  served per group.
-- #todo[which resource sharding relieves, and how process placement and client load make it
-  the bottleneck with 1 group; what result counts as success; a correctness check that each key
-  is served by its owning group and `Get` returns the latest `Put`].
+- *Transport.* Carries client requests and Raft messages between processes.
+- *Raft server.* Leader election (`RequestVote`), log replication (`AppendEntries`), commit
+  tracking, and the read index.
+- *Request handler.* Serves `Put`, `Get` and `Append`, redirects followers' requests to the
+  leader, rejects requests for other groups, and replies once an entry is applied.
+- *State machine.* Applies committed entries to the key-value map and keeps the dedup table.
+- *Persistent log.* Stores Raft state durably and returns it on restart.
+- *Client library.* Gives applications `Put`, `Get` and `Append`; routes each request to its
+  key's group, assigns sequence numbers, retries, and follows hints.
 
-=== Replication and failover
+#suggest[How the modules interact:
+- The request handler submits each write to Raft and replies once the entry at its log index
+  is applied, or fails it if leadership is lost first.
+- Raft writes its term, vote and new entries to the persistent log before answering any RPC,
+  and rebuilds from it on restart.
+- Raft delivers committed entries to the state machine in log order; the state machine returns
+  each entry's reply (a stored one, for a duplicate).
+- For a read, the request handler gets a read index from Raft and reads the state machine once
+  that index is applied.]
 
-- #todo[experiment, what is measured, expected result]
+= Evaluation
 
-=== Linearizable operations
+== Setup on the Khoury cluster
 
-- #todo[experiment, what is measured, expected result]
+- Machines: linux-071 to linux-085 (15). Each server runs on its own machine: 3 groups #sym.times 3
+  replicas = 9 machines, plus 2 machines for clients. Ports are in 10000--65535.
+- Processes are started and killed over `ssh` (`kill -9` for crashes); logs live under `/tmp`
+  on each machine's local disk, since home directories are on NFS, shared by all machines.
+- Partitions are simulated in-process (no root access for firewall rules): a server told to
+  isolate itself drops all messages to and from its peers until told to stop.
+- Lost replies are simulated by a server option that drops a given fraction of client replies
+  after the request has been applied.
+- Every client records each operation's start time, end time, arguments and result. Servers'
+  clocks are not used.
+- *History checker.* Every appended message is a unique token (client id and sequence
+  number), so all reads of a channel must be prefixes of one message order. The checker
+  verifies, per channel: (1) every read is a prefix of the longest read; (2) a read includes
+  every append acknowledged before it started; (3) a read that started after another read
+  finished returns at least as much; (4) a read contains no message whose append started after
+  the read finished; (5) every message appears at most once, and every acknowledged message
+  appears.
+- Topic updates share the write path with posts and are covered by functional tests only.
+- Repeat each experiment 5 times and report medians, plus p99 for latency.
 
-=== Exactly-once writes
+== Replication and failover
 
-- #todo[experiment, what is measured, expected result]
+- One group under steady update-heavy load; `kill -9` the leader. Measure the unavailability window: time
+  from the kill to the first completed write.
+- Expected: about one election timeout plus a round trip (under 1 s). Killing a follower
+  instead causes no gap.
+- Partition the leader from its followers: the old leader's writes never complete, and the
+  majority elects a new leader and continues.
+- Success: in every run the group recovers, and the checker finds every acknowledged message.
 
-=== Crash recovery
+== Crash recovery
 
-- #todo[experiment, what is measured, expected result]
+- Kill one follower under load and restart it: it catches up, and after the load stops all
+  three replicas hold identical key-value maps (compared by hash).
+- Kill all three servers of a group at once and restart them: every acknowledged message is
+  still present.
+- Measure restart time against log length (10#super[4], 10#super[5], 10#super[6] entries).
+  Expected: linear growth, the cost of having no snapshots.
 
-=== Running on the Khoury cluster
+== Exactly-once writes
 
-- #todo[number of machines, placement of servers and clients, how processes are started and
-  killed, how results are collected]
+- Update-heavy mix, while servers drop 20% of replies and leaders are killed, so many
+  requests are retried.
+- Success: the checker finds no message twice.
+- Control: with the dedup check disabled, duplicates should appear.
 
-== Timeline
+== Linearizable operations
 
-Fixed dates: progress reports Nov 16, 23 and 30; code and report due Fri Dec 4; video due
-Mon Dec 7. Rishiraj is unavailable Nov 20–28; Dec 5–7 is reserved for recording the video.
+- Update-heavy mix, 10 clients on 3 channels (high contention), for 2 minutes, with a leader kill or partition
+  every 10 s. Run the checker over the history.
+- Success: no violations in any run.
+- Control: a variant where the leader serves `Get` from its local map without the read-index
+  round. With a partitioned old leader, the checker should report stale reads, showing it can
+  detect the failure it guards against.
 
-#todo[step-by-step build and evaluation plan with dates]
+== Sharding
 
-== Division of work
+- Read-mostly mix. Vary the number of shard groups from 1 to 3. For each, increase the number of clients until
+  throughput stops rising, and report peak throughput and the latency at that load.
+- Expected: near-linear scaling, since each group's leader is the bottleneck (with mostly
+  reads, its CPU and network for read-index rounds) and groups share nothing. Success: 3 groups
+  reach at least 2.5#sym.times the throughput of 1 group.
+- Correctness: each reply's group id matches the key's group, and histories pass the checker.
 
-#todo[which features each member owns end to end]
+== Batching (stretch)
+
+- Repeat the 1-group throughput experiment with batching off and on, under the update-heavy
+  mix (batching only speeds up writes).
+- Expected: higher peak throughput with batching, since one disk write covers many entries;
+  latency at low load roughly unchanged. Rerun the linearizability experiment with batching on
+  to check it breaks nothing.
+
+= Timeline
+
+The first three weeks end on progress report dates; the last ends at the code and report deadline.
+
+#table(
+  columns: (auto, 1fr),
+  stroke: none,
+  inset: (x: 6pt, y: 5pt),
+  table.hline(),
+  [*Week*], [*Team deliverable*],
+  table.hline(stroke: 0.5pt),
+  [Nov 12--16], [Frozen message, log entry and config formats; leader election and in-memory
+    replication of `Put` and `Append` in one shard group.],
+  [Nov 17--23], [Persistence and crash recovery; exactly-once writes; linearizable `Get`;
+    failover after a leader kill, tested on the cluster.],
+  [Nov 24--30], [Sharding across 3 groups, with routing by key; a first end-to-end evaluation run on
+    the cluster.],
+  [Dec 1--4], [All experiments, run on the cluster, with fixes; the final report and run
+    instructions (due Dec 4); batching, if time allows.],
+  table.hline(),
+)
+
+= References
+
+#bibliography("refs.bib", title: none, style: "ieee")
