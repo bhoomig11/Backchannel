@@ -213,7 +213,8 @@ library, with no central master. @fig-topology shows the path of one request.
 
 == Concepts
 
-- *Chat server.* The chat app's backend. It serves the app's users and is the store's client.
+- *Client.* One worker of a chat server, the chat app's backend, sending requests to the store
+  through the client library. Each chat server runs many clients.
 - *Channel.* A named conversation for one production line, shift or team, identified by an id
   such as `line-3`. It has a message history and a topic.
 - *Message.* One post in a channel, with its sender, its text, and an id unique across the
@@ -224,8 +225,7 @@ library, with no central master. @fig-topology shows the path of one request.
 
 == Data model and client API
 
-- Each chat server runs many clients of the store, one per worker. Each client has a unique id
-  and at most one outstanding request.
+- Each client has a unique id and at most one outstanding request.
 - Keys and values are strings. A channel's history is stored at `channel/<id>/msgs` and its
   topic at `channel/<id>/topic`.
 - Each message is stored as a self-delimiting record carrying its sender, text and id, so a
