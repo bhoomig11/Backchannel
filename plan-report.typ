@@ -45,6 +45,12 @@
 #set enum(indent: 0.5em)
 #show heading.where(level: 1): set block(above: 1.4em, below: 0.8em)
 #show figure.caption: set text(size: 9.5pt)
+// Terms lists render like the report's bullet lists: same indent and marker. Code-style terms
+// stay regular weight; monospace already sets them apart.
+#show terms: it => list(..it.children.map(i => {
+  let term = if i.term.func() == raw { i.term } else { strong(i.term) }
+  [#term: #i.description]
+}))
 
 #align(center)[
   #text(size: 16pt, weight: "bold")[#title] \
@@ -68,7 +74,7 @@ groups of servers, each group replicated with Raft.
 - Each channel's message history is one key: a post appends to it, and a load reads it.
 - Channels are spread across a fixed set of shard groups by hashing.
 - Each shard group is replicated across 3 servers with Raft.
-- The chat app's servers see one store, where they post, load channels and set topics.
+- The chat app's servers see one store, where they post messages and load channels.
 - The client library hides the shard layout and sends each request to the owning group.
 - Instead of a central master directing clients, a follower redirects each request to its leader.
 
@@ -213,33 +219,31 @@ library, with no central master. @fig-topology shows the path of one request.
 
 == Concepts
 
-#[
-  // Render this terms list like the report's bullet lists: same indent and marker.
-  #show terms: it => list(..it.children.map(i => [*#i.term*: #i.description]))
-  / Client: A chat server worker that sends requests to the store through the client library.
-  / Channel: A conversation for one production line, shift or team, with a history and topic.
-  / Message: A piece of text a user sends to a channel, with its sender and a unique id. A
-    channel's history is its messages in the order they were posted.
-  / Topic: A one-line summary shown with a channel, such as "Line 3 on hold for inspection".
-    Setting a new topic replaces the old one.
-]
+/ Client: A chat server worker that sends requests to the store through the client library.
+/ Channel: A conversation for one production line, shift or team, with a message history.
+/ Message: A piece of text a user sends to a channel, with its sender and a unique id. A
+  channel's history is its messages in the order they were posted.
 
 == Data model and client API
 
 - Each client has a unique id and at most one outstanding request.
-- Keys and values are strings. A channel's history is stored at `channel/<id>/msgs` and its
-  topic at `channel/<id>/topic`.
-- Each message is stored as a self-delimiting record carrying its sender, text and id, so a
-  stored history parses back into its messages. A message's id is the (client id, sequence
-  number) of the request that posted it.
-- Operations:
-  - `Append(k, v)` sets `k` to its current value followed by `v`; a missing key counts as empty.
-    Posting a message is an `Append` to the channel's `msgs` key.
-  - `Get(k)` returns the value, or `NOT_FOUND`. Loading a channel is a `Get` of its `msgs` key.
-  - `Put(k, v)` sets `k` to `v`. Setting a channel's topic is a `Put` to its `topic` key.
+- Keys and values are opaque strings. A channel's history lives at #box(`"channel/<id>/msgs"`).
+- Each message is stored as a self-delimiting record of its sender, text and id, so a history
+  parses back into messages. The id is the posting request's (client id, sequence number).
+- Operations and their chat use. There is no overwrite, since histories only grow:
+  / `Append(k, v)`: Adds `v` to the end of `k`'s value. Posts a message to a channel's history.
+  / `Get(k)`: Returns `k`'s value. Loads a channel's history.
+- A load returns the whole history; experiments keep histories short, so pagination is left for
+  later.
 - Request fields: client id, sequence number, operation, key, value.
-- Reply fields: status (`OK`, `NOT_FOUND`, `WRONG_GROUP`, `NOT_LEADER`), value, group id of the
-  replying server, and a hint (a server id to retry at).
+- Reply fields: status, value, group id of the replying server, and a hint (a server id to retry
+  at).
+- Statuses:
+  / `OK`: The operation succeeded.
+  / `NOT_FOUND`: `Get` on a missing key.
+  / `NOT_LEADER`: The server is a follower, and the hint names its leader.
+  / `WRONG_GROUP`: The key belongs to another group.
+- A request with no reply before the timeout is retried.
 
 == Routing
 
@@ -258,8 +262,8 @@ library, with no central master. @fig-topology shows the path of one request.
 - Standard Raft @raft[Fig. 2]: leader election (`RequestVote`), log replication
   (`AppendEntries`), commit on majority. Each group runs its own Raft instance; groups share
   nothing.
-- `Put` and `Append` are appended to the leader's log and applied to the key-value map after
-  they commit (@fig-paths, top).
+- Each `Append` enters the leader's log and is applied to the key-value map after it
+  commits (@fig-paths, top).
 - A group without a majority stops serving its keys rather than risk returning stale data.
   Other groups are unaffected, and the group resumes once a majority restarts.
 
@@ -341,11 +345,11 @@ All modules are written in C++17.
 - *Transport.* Carries client requests and Raft messages between processes.
 - *Raft server.* Leader election (`RequestVote`), log replication (`AppendEntries`), commit
   tracking, and the read index.
-- *Request handler.* Serves `Put`, `Get` and `Append`, redirects followers' requests to the
+- *Request handler.* Serves `Get` and `Append`, redirects followers' requests to the
   leader, rejects requests for other groups, and replies once an entry is applied.
 - *State machine.* Applies committed entries to the key-value map and keeps the dedup table.
 - *Persistent log.* Stores Raft state durably and returns it on restart.
-- *Client library.* Gives applications `Put`, `Get` and `Append`; routes each request to its
+- *Client library.* Gives applications `Get` and `Append`; routes each request to its
   key's group, assigns sequence numbers, retries, and follows hints.
 
 #suggest[How the modules interact:
@@ -379,7 +383,6 @@ All modules are written in C++17.
   finished returns at least as much; (4) a read contains no message whose append started after
   the read finished; (5) every message appears at most once, and every acknowledged message
   appears.
-- Topic updates share the write path with posts and are covered by functional tests only.
 - Repeat each experiment 5 times and report medians, plus p99 for latency.
 
 == Replication and failover
@@ -446,7 +449,7 @@ The first three weeks end on progress report dates; the last ends at the code an
   [*Week*], [*Team deliverable*],
   table.hline(stroke: 0.5pt),
   [Nov 12--16], [Frozen message, log entry and config formats; leader election and in-memory
-    replication of `Put` and `Append` in one shard group.],
+    replication of `Append` in one shard group.],
   [Nov 17--23], [Persistence and crash recovery; exactly-once writes; linearizable `Get`;
     failover after a leader kill, tested on the cluster.],
   [Nov 24--30], [Sharding across 3 groups, with routing by key; a first end-to-end evaluation run on
