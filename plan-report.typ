@@ -213,15 +213,16 @@ library, with no central master. @fig-topology shows the path of one request.
 
 == Concepts
 
-- *Client.* One worker of a chat server, the chat app's backend, sending requests to the store
-  through the client library. Each chat server runs many clients.
-- *Channel.* A named conversation for one production line, shift or team, identified by an id
-  such as `line-3`. It has a message history and a topic.
-- *Message.* One post in a channel, with its sender, its text, and an id unique across the
-  system. A channel's history is the ordered sequence of its messages; posting adds a message
-  to the end.
-- *Topic.* A short line describing a channel's current state, such as "Line 3 on hold for
-  inspection". Setting a topic replaces the old one.
+#[
+  // Render this terms list like the report's bullet lists: same indent and marker.
+  #show terms: it => list(..it.children.map(i => [*#i.term*: #i.description]))
+  / Client: A chat server worker that sends requests to the store through the client library.
+  / Channel: A conversation for one production line, shift or team, with a history and topic.
+  / Message: A piece of text a user sends to a channel, with its sender and a unique id. A
+    channel's history is its messages in the order they were posted.
+  / Topic: A one-line summary shown with a channel, such as "Line 3 on hold for inspection".
+    Setting a new topic replaces the old one.
+]
 
 == Data model and client API
 
