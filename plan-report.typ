@@ -289,7 +289,8 @@ Keys are split across independent Raft groups with no central master, as @fig-to
       line((xs.at(a), y), (xs.at(b), y), mark: arr)
       content(((xs.at(a) + xs.at(b)) / 2, y + 0.27), text(8.5pt, label))
     }
-    let note(y, i, body) = content((xs.at(i), y), box(fill: white, inset: 2pt, text(8.5pt, body)))
+    let note(y, i, body) = content((xs.at(i), y),
+      box(fill: white, inset: 2pt, outset: (x: 1pt, y: 3pt), text(8.5pt, body)))
     let section(y, body) = content((-0.9, y), anchor: "east", text(9pt, style: "italic", body))
 
     section(-0.6, [Write])
@@ -309,36 +310,34 @@ Keys are split across independent Raft groups with no central master, as @fig-to
     note(-8.6, 1, [still leader; wait until applied #sym.gt.eq readIndex])
     msg(-9.3, 1, 0, [value])
   }),
-  caption: [Write and read paths in one group. Writes are acknowledged only after they commit
-    on a majority and are applied. A read is served by the leader without a log entry, after a
-    majority confirms it is still leader, so a deposed leader cannot return stale data.],
+  caption: [Write and read paths in one shard group.],
 ) <fig-paths>
 
 == Linearizable reads
 
-- A new leader appends a no-op entry at the start of its term, so it learns which entries are
-  committed.
-- `Get` follows the read-index protocol @raft[Sec. 8], shown in @fig-paths: no log entry, but one
-  heartbeat round per read.
+- A new leader appends a no-op entry when its term starts, to learn which entries are committed.
+- `Get` follows the read-index protocol from Section 8 of the Raft paper @raft, shown in
+  @fig-paths above. With no log entry, one heartbeat round keeps a deposed leader from serving
+  stale data.
 
 == Exactly-once writes
 
 - Each request carries (client id, sequence number), and log entries carry them too.
 - The state machine keeps a table: client id #sym.arrow.r (last applied sequence number, its reply).
-- The check happens when a committed entry is applied: a duplicate is skipped and the stored
-  reply is returned. Every replica applies the same log in the same order, so all replicas
-  build the same table, and a new leader has it.
+- When a committed entry is applied, a duplicate is skipped and its stored reply returned.
+  Every replica applies the same log in order, so all build the same table and a new leader
+  has it.
 - The leader replies to the client once the entry at its assigned index is applied.
 
 == Persistence
 
-- Each server keeps its term, vote and log on its machine's local disk, and makes every change
-  durable (fsync) before answering any RPC @raft[Fig. 2].
-- On restart, the server rebuilds its term, vote, log, key-value map and dedup table from what
-  it persisted.
-- Known risks: a crash while the log is being rewritten after a conflict must not lose the
-  latest term or vote; partially written records must be detected on restart; restart time
-  grows with the log, since there are no snapshots.
+- Each server keeps its term, vote and log on local disk and makes every change durable before
+  answering any RPC, as Figure 2 of the Raft paper @raft requires.
+- On restart, a server rebuilds its term, vote, log, key-value map and dedup table from disk.
+- Known risks:
+  - A crash while the log is rewritten after a conflict must not lose the latest term or vote.
+  - Partially written records must be detected on restart.
+  - Restart time grows with the log, since there are no snapshots.
 
 == Configuration and timing
 
