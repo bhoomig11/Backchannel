@@ -449,25 +449,13 @@ last at most a minute, all processes stop between runs, and only 3-group runs us
 #block(breakable: false)[
 = Timeline
 
-The first three weeks end on progress report dates; the last ends at the code and report deadline.
+The first three weeks end on progress reports, the fourth on code and report, the last on video.
 
-#table(
-  columns: (auto, 1fr),
-  stroke: none,
-  inset: (x: 6pt, y: 5pt),
-  table.hline(),
-  [*Week*], [*Team deliverable*],
-  table.hline(stroke: 0.5pt),
-  [Nov 12--16], [Frozen message, log entry and command-line formats; leader election and in-memory
-    replication of `Append` in one shard group.],
-  [Nov 17--23], [Persistence and crash recovery; exactly-once writes; linearizable `Get`;
-    failover after a leader kill, tested on the cluster.],
-  [Nov 24--30], [Sharding across 3 groups, with routing by key; a first end-to-end evaluation run on
-    the cluster.],
-  [Dec 1--4], [All experiments, run on the cluster, with fixes; the final report and run
-    instructions (due Dec 4); batching, if time allows.],
-  table.hline(),
-)
+/ Nov 12--16: Message and log formats; leader election and log replication; workload clients.
+/ Nov 17--23: Crash recovery; exactly-once writes; linearizable reads; history checker; failover.
+/ Nov 24--30: Sharding over 3 groups; fault injection and experiment driver; first full run.
+/ Dec 1--4: All experiments and fixes; final report; batching, if time allows.
+/ Dec 5--7: Presentation slides and video.
 ]
 
 = References
