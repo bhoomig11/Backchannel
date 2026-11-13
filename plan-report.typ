@@ -332,7 +332,7 @@ Keys are split across independent Raft groups with no central master, as @fig-to
 == Persistence
 
 - Each server keeps its term, vote and log on local disk and makes every change durable before
-  answering any RPC, as the Raft paper's condensed summary requires @raft.
+  answering any RPC, as the Raft paper's condensed summary @raft requires.
 - On restart, a server reloads its term, vote and log, then rebuilds the key-value map and dedup
   table by re-applying entries as it learns they are committed.
 - Known risks:
