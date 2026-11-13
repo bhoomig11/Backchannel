@@ -379,14 +379,20 @@ last at most a minute, all processes stop between runs, and only 3-group runs us
   - *Partition:* The message names peers to cut off, and the RPC layer drops all their traffic.
   - *Reply loss:* The message sets a rate, and the RPC layer drops that share of client replies.
   - *Healing:* A message with no peers and a zero rate clears both faults.
-- *Histories:* Clients log each operation's arguments, result, and start and end times.
-- *History checker:* Every message is a unique token (client id, sequence number), so all reads
-  of a channel must be prefixes of one message order. Per channel, the checker verifies:
+- *Channels:* Every run starts with each channel pre-filled to 100 messages.
+- *Histories:* Clients log each operation's arguments, result, and start and end times. Experiments
+  1--4 run the checker with all clients on one machine, so their timestamps share a clock.
+- *Valid runs:* A run counts only if it completes operations and, when faults are injected, retries.
+- *History checker:* Every message is a unique token (client id, sequence number), and an append
+  is acknowledged once its client receives `OK`. All reads of a channel must be prefixes of one
+  message order, and each run ends, after faults heal, with a final read of every channel. Per
+  channel, the checker verifies:
   + Every read is a prefix of the longest read.
   + A read includes every append acknowledged before it started.
   + A read that started after another read finished returns at least as much.
   + A read contains no message whose append started after the read finished.
-  + Every message appears at most once, and every acknowledged message appears.
+  + An append acknowledged before another append started comes first in the order.
+  + Every message appears at most once, and the final read holds every acknowledged one.
 
 #block(breakable: false)[
 == Experiment 1: Replication and failover
