@@ -83,7 +83,7 @@ without that server's limits. Evaluation tests each goal with one experiment, in
 == Primary goals
 
 - *Replication and failover.* Each group keeps serving while a majority of its three replicas is
-  up, and a leader failure costs only the time it takes to elect a new one.
+  up, and a leader failure pauses its clients for about one request timeout.
 - *Crash recovery.* A crashed server restarts from its persisted log and catches up with its
   group, and no acknowledged write is lost, even if all three replicas crash at once.
 - *Exactly-once writes.* A request retried after a timeout takes effect only once, even if the
@@ -400,17 +400,19 @@ last at most a minute, all processes stop between runs, and only 3-group runs us
 - One group under update-heavy load. Crash the leader, then in a separate run a follower, and
   measure the unavailability window, from the crash to the first completed write.
 - Partition the leader from its followers for 10~s, then heal the partition.
-- *Expected:* A leader crash leaves a window under 1~s (one election timeout plus a round trip),
-  a follower crash none. A partitioned leader commits nothing while the majority elects another.
-- *Success:* In every run the group recovers, and the checker finds every acknowledged message.
+- *Expected:* A leader crash leaves about 1~s, the request timeout, since the election finishes
+  within it, and a follower crash none. A partitioned leader commits nothing.
+- *Success:* Each leader-crash window is under 2~s, the partitioned leader acknowledges no write,
+  and no acknowledged message is lost.
 ]
 
 #block(breakable: false)[
 == Experiment 2: Crash recovery
 
 - Update-heavy mix. Crash one follower and restart it, then crash a whole group and restart it.
-- Measure restart time against log length (10#super[3], 10#super[4], 10#super[5] entries).
-- *Expected:* Restart time grows linearly with the log, the cost of having no snapshots.
+- Measure restart time (start until caught up with the leader) for logs of 10#super[3], 10#super[4] and
+  10#super[5] entries, built without the usual pre-fill.
+- *Expected:* Restart time grows linearly with the log, because there are no snapshots.
 - *Success:* The restarted follower catches up, all replicas end with identical key-value maps,
   and after the whole-group crash no acknowledged message is lost.
 ]
@@ -418,30 +420,30 @@ last at most a minute, all processes stop between runs, and only 3-group runs us
 #block(breakable: false)[
 == Experiment 3: Exactly-once writes
 
-- Update-heavy mix while servers drop 20% of replies and a leader crashes every 10~s.
+- Update-heavy mix, 20% of replies dropped, and a leader crash every 10~s, restarted after 5~s.
 - *Success:* The checker finds no message twice.
-- *Control:* With the dedup check disabled, duplicates should appear.
+- *Control:* With the dedup check disabled, duplicates should appear in every control run.
 ]
 
 #block(breakable: false)[
 == Experiment 4: Linearizable operations
 
-- Update-heavy mix, 10 clients on 3 channels, so reads and writes to a channel overlap,
-  for 1~minute, with a leader crash or partition every 10~s. Run the checker over the history.
+- Update-heavy mix, 10 clients on 3 channels, so reads and writes to a channel overlap, each at
+  most 20 operations a second, for 1~minute, alternating a leader crash
+  and a 5~s leader partition every 10~s, with each crashed server restarted 5~s later. Run the
+  checker over the history.
 - *Success:* No violations in any run.
-- *Control:* The leader serves `Get` from its local map without the read-index round. With a
-  partitioned old leader, the checker should report stale reads, showing it can detect them.
+- *Control:* The leader serves `Get` from its local map without the read's heartbeat round. With a
+  partitioned old leader, the checker should report stale reads in every control run.
 ]
 
 #block(breakable: false)[
 == Experiment 5: Sharding
 
 - Read-mostly mix. Vary the number of shard groups from 1 to 3. For each, add clients
-  until throughput stops rising, and report peak throughput and the latency at that load.
-- *Expected:* Near-linear scaling, since each group's leader is the bottleneck (for mostly reads,
-  its CPU and network for read-index rounds) and groups share nothing.
-- *Success:* 3 groups reach at least 2.5#sym.times the throughput of 1 group, each reply's group
-  id matches the key's group, and histories pass the checker.
+  until throughput gains under 5%, and report peak throughput and the latency at that load.
+- *Expected:* Near-linear scaling, as groups share nothing and each is bound by its own leader.
+- *Success:* 3 groups reach #sym.gt.eq 2.5#sym.times the 1-group throughput, every reply from the key's group.
 ]
 
 #block(breakable: false)[
@@ -451,7 +453,8 @@ last at most a minute, all processes stop between runs, and only 3-group runs us
   mix, since batching only speeds up writes.
 - Rerun Experiment 4 with batching on.
 - *Expected:* Higher peak throughput with batching, and roughly unchanged latency at low load.
-- *Success:* Batching raises peak throughput, and the rerun of Experiment 4 finds no violations.
+- *Success:* Batching raises peak throughput beyond the spread across its 5 runs, and the rerun of
+  Experiment 4 finds no violations.
 ]
 
 #block(breakable: false)[
