@@ -1,5 +1,4 @@
 // Project plan report. Build: typst compile plan-report.typ (from the repo root).
-// Red TODO marks are undecided items; remove the todo() calls before submitting.
 
 #import "@preview/cetz:0.5.3"
 
@@ -7,8 +6,6 @@
 #let members = ("Rishiraj Dhar", "Bhoomika Gupta")
 #let team = "5"
 
-#let todo(body) = text(fill: red)[*TODO:* #body]
-#let suggest(body) = text(fill: blue)[*Suggestion:* #body]
 
 // One hue: shades of a single blue; elements differ by lightness and dash only.
 #let accent = rgb("#1f5f9e")
@@ -350,29 +347,18 @@ Keys are split across independent Raft groups with no central master, as @fig-to
   / Request: 1 s before the client library retries a request.
   / Retry cap: 10 s of retries before the library gives up on a request.
 
-= Modules
+== Modules
 
 All modules are written in C++17.
 
-- *Transport.* Carries client requests and Raft messages between processes.
-- *Raft server.* Leader election (`RequestVote`), log replication (`AppendEntries`), commit
-  tracking, and the read index.
+- *RPC layer.* Client and server stubs for every message, plus one listener per server that
+  dispatches by type: client operations to the request handler, Raft messages to the Raft server.
+- *Raft server.* Elections (`RequestVote`), log replication (`AppendEntries`), commits, read index.
 - *Request handler.* Serves `Get` and `Append`, redirects followers' requests to the
   leader, rejects requests for other groups, and replies once an entry is applied.
 - *State machine.* Applies committed entries to the key-value map and keeps the dedup table.
 - *Persistent log.* Stores Raft state durably and returns it on restart.
-- *Client library.* Gives applications `Get` and `Append`; routes each request to its
-  key's group, assigns sequence numbers, retries, and follows hints.
-
-#suggest[How the modules interact:
-- The request handler submits each write to Raft and replies once the entry at its log index
-  is applied, or fails it if leadership is lost first.
-- Raft writes its term, vote and new entries to the persistent log before answering any RPC,
-  and rebuilds from it on restart.
-- Raft delivers committed entries to the state machine in log order; the state machine returns
-  each entry's reply (a stored one, for a duplicate).
-- For a read, the request handler gets a read index from Raft and reads the state machine once
-  that index is applied.]
+- *Client library.* Offers `Get` and `Append`, routes by key, numbers requests, retries, follows hints.
 
 = Evaluation
 
