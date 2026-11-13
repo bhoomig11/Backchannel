@@ -267,11 +267,11 @@ Keys are split across independent Raft groups with no central master, as @fig-to
 
 == Replication (per shard group)
 
-- Standard Raft @raft[Fig. 2]: leader election (`RequestVote`), log replication
-  (`AppendEntries`), commit on majority. Each group runs its own Raft instance; groups share
-  nothing.
+- Standard Raft, as summarized in Figure 2 of the Raft paper @raft: leader election
+  (`RequestVote`), log replication (`AppendEntries`), commit on majority. Groups run independent
+  Raft instances.
 - Each `Append` enters the leader's log and is applied to the key-value map after it
-  commits (@fig-paths, top).
+  commits, as in the write path of @fig-paths below.
 - A group without a majority stops serving its keys rather than risk returning stale data.
   Other groups are unaffected, and the group resumes once a majority restarts.
 
