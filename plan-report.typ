@@ -266,7 +266,7 @@ Keys are split across independent Raft groups with no central master, as @fig-to
 
 == Replication (per shard group)
 
-- Standard Raft, as summarized in Figure 2 of the Raft paper @raft: leader election
+- Standard Raft, as in the Raft paper's condensed summary @raft: leader election
   (`RequestVote`), log replication (`AppendEntries`), commit on majority. Groups run independent
   Raft instances.
 - Each `Append` enters the leader's log and is applied to the key-value map after it
@@ -315,9 +315,9 @@ Keys are split across independent Raft groups with no central master, as @fig-to
 == Linearizable reads
 
 - A new leader appends a no-op entry when its term starts, to learn which entries are committed.
-- `Get` follows the read-index protocol from Section 8 of the Raft paper @raft, shown in
-  @fig-paths above. With no log entry, one heartbeat round keeps a deposed leader from serving
-  stale data.
+- `Get` follows the read protocol in Section 8 of the Raft paper @raft, shown in @fig-paths
+  above. It waits for the new leader's no-op to commit, then for a heartbeat round sent for the
+  read, which keeps a deposed leader from serving stale data.
 
 == Exactly-once writes
 
@@ -332,8 +332,9 @@ Keys are split across independent Raft groups with no central master, as @fig-to
 == Persistence
 
 - Each server keeps its term, vote and log on local disk and makes every change durable before
-  answering any RPC, as Figure 2 of the Raft paper @raft requires.
-- On restart, a server rebuilds its term, vote, log, key-value map and dedup table from disk.
+  answering any RPC, as the Raft paper's condensed summary requires @raft.
+- On restart, a server reloads its term, vote and log, then rebuilds the key-value map and dedup
+  table by re-applying entries as it learns they are committed.
 - Known risks:
   - A crash while the log is rewritten after a conflict must not lose the latest term or vote.
   - Partially written records must be detected on restart.
