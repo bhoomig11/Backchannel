@@ -244,6 +244,7 @@ Keys are split across independent Raft groups with no central master, as @fig-to
 - Operations and their chat use. There is no overwrite, since histories only grow:
   / `Append(k, v)`: Adds `v` to the end of `k`'s value. Posts a message to a channel's history.
   / `Get(k)`: Returns `k`'s value. Loads a channel's history.
+- An `Append` value is at most 256 bytes, which bounds every stored message record.
 - A load returns the whole history; experiments keep histories short, so pagination is left for
   later.
 - Each key belongs to one shard group, chosen by a hash that spreads keys evenly and that every
@@ -255,6 +256,7 @@ Keys are split across independent Raft groups with no central master, as @fig-to
 - Statuses:
   / `OK`: The operation succeeded.
   / `NOT_FOUND`: `Get` on a missing key.
+  / `TOO_LARGE`: The `Append` value exceeds 256 bytes, so nothing is applied.
   / `NOT_LEADER`: The server is a follower or candidate, and the hint names the leader if known.
     With no hint, the client waits one election timeout and tries another server.
   / `WRONG_GROUP`: The key belongs to another group, so the client's server list is wrong. The
