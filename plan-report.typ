@@ -245,11 +245,10 @@ Keys are split across independent Raft groups with no central master, as @fig-to
   / `Append(k, v)`: Adds `v` to the end of `k`'s value. Posts a message to a channel's history.
   / `Get(k)`: Returns `k`'s value. Loads a channel's history.
 - An `Append` value is at most 256 bytes, which bounds every stored message record.
-- A load returns the whole history; experiments keep histories short, so pagination is left for
-  later.
+- A load returns the whole history. Histories stay short in experiments, so pagination can wait.
 - Each key belongs to one shard group, chosen by a hash that spreads keys evenly and that every
   process, clients included, computes from its server list. The client library sends each request to the key's group: to
-  the last leader it saw there, or else to any member.
+  the last leader it saw there, or else to any server in it.
 - Request fields: client id, sequence number, operation, key, value.
 - Reply fields: client id, sequence number, status, value, group id of the replying server, and a
   hint (a server id to retry at). The library discards a reply for any other sequence number.
@@ -271,7 +270,7 @@ Keys are split across independent Raft groups with no central master, as @fig-to
   Raft instances.
 - Each `Append` enters the leader's log and is applied to the key-value map after it
   commits, as in the write path of @fig-paths below.
-- A group without a majority stops serving its keys rather than risk returning stale data.
+- A group without a majority stops serving its keys, so it never returns stale data.
   Other groups are unaffected, and the group resumes once a majority restarts.
 
 #figure(
@@ -329,6 +328,7 @@ Keys are split across independent Raft groups with no central master, as @fig-to
 - The leader replies `OK` once the entry at the request's index is applied, if that entry is still
   the request's own. Otherwise leadership changed, and it replies `NOT_LEADER`.
 
+#block(breakable: false)[
 == Persistence
 
 - Each server keeps its term, vote and log on local disk and makes every change durable before
@@ -339,6 +339,7 @@ Keys are split across independent Raft groups with no central master, as @fig-to
   - A crash while the log is rewritten after a conflict must not lose the latest term or vote.
   - Partially written records must be detected on restart.
   - Restart time grows with the log, since there are no snapshots.
+]
 
 == Configuration and timing
 
