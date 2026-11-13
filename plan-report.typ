@@ -110,7 +110,11 @@ without that server's limits. Evaluation tests each goal with one experiment, in
 - *Pipelined replication.* Several replication rounds in flight per follower.
 ]
 
-= Assumptions
+= Design
+
+Backchannel favors consistency over availability: a group serves only while a majority is up.
+
+== Assumptions
 
 - *Failures.* Crash-recover, non-Byzantine. Any number of servers may crash at the same time.
 - *Network.* Messages may be lost, delayed, duplicated, reordered or cut off by partitions.
@@ -120,16 +124,15 @@ without that server's limits. Evaluation tests each goal with one experiment, in
   - *Update-heavy.* 50% loads, 50% posts, maximizing interleaved reads and writes.
   - *Read-mostly.* 95% loads, 5% posts, stressing the read path.
 
-= Design
+== Architecture
 
-Backchannel splits keys across independent Raft groups and routes requests in the client
-library, with no central master. @fig-topology shows the path of one request.
+Keys are split across independent Raft groups with no central master, as @fig-topology shows.
 
 #figure(
   cetz.canvas(length: 1mm, {
     import cetz.draw: *
     // Spacing ladder (mm): every gap, padding and margin is one of these.
-    let sp(n) = { assert(n in (1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64)); n }
+    let sp(n) = { assert(n in (1, 2, 3, 4, 6, 8, 12, 16, 20, 24, 32, 48, 64)); n }
     let fs = 10.5pt
     let lfs = 9.5pt
     let lr = 2.5
@@ -147,19 +150,20 @@ library, with no central master. @fig-topology shows the path of one request.
       stroke: (paint: paint, thickness: heavy, dash: dash))
 
     // Shard groups: three replicas each, a vertical edge facing the chat server.
-    let pad = sp(4)
-    let edge = sp(12)
-    let reach = 10
-    let pw = 2 * pad + 2 * r + reach
+    let pad = sp(3)
+    let padx = sp(4)
+    let edge = sp(20)
+    let reach = 17
+    let pw = 2 * padx + 2 * r + reach
     let ph = 2 * pad + 2 * r + edge
     let srv-right = pw
-    let lib = (pad, pw - pad)
+    let lib = (padx, pw - padx)
     let px = srv-right + sp(64)
-    let stride = ph + sp(2) + cap + sp(4)
+    let stride = ph + sp(2) + cap + sp(3)
     let top(g) = -g * stride
     let pts(g) = {
       let y = top(g) - pad - r
-      ((px + pad + r, y), (px + pad + r, y - edge), (px + pad + r + reach, y - edge / 2))
+      ((px + padx + r, y), (px + padx + r, y - edge), (px + padx + r + reach, y - edge / 2))
     }
     let leaders = (2, 1, 0)
     for g in range(3) {
@@ -183,7 +187,8 @@ library, with no central master. @fig-topology shows the path of one request.
     content("lib", align(center, text(fs)[Client \ library]))
     label((srv.at(0), srv.at(2) + sp(2)), "base-west", [Chat server])
 
-    // Routing exchange with group 1: request to a follower, redirect, retry at the leader.
+    // Routing exchange with group 1: request to a follower and its redirect, then the retry at
+    // the leader and its reply. Requests are labelled above their arrows, replies below.
     let off = sp(2)
     let hit = calc.sqrt(r * r - off * off)
     let tx = srv.at(1) + sp(2) + sp(4)
@@ -191,8 +196,10 @@ library, with no central master. @fig-topology shows the path of one request.
     label((tx, f.at(1) + off + sp(2)), "south-west", [#step(1) `Append(k, v)`])
     arrow((f.at(0) - hit, f.at(1) - off), (lib.at(1), f.at(1) - off), redirect, dash: "dashed")
     label((tx, f.at(1) - off - sp(2)), "north-west", [#step(2) `NOT_LEADER`, hint])
-    arrow((lib.at(1), l.at(1)), (l.at(0) - r, l.at(1)), accent)
-    label((tx, l.at(1) - sp(2)), "north-west", [#step(3) retry at leader])
+    arrow((lib.at(1), l.at(1) + off), (l.at(0) - hit, l.at(1) + off), accent)
+    label((tx, l.at(1) + off + sp(2)), "south-west", [#step(3) retry at leader])
+    arrow((l.at(0) - hit, l.at(1) - off), (lib.at(1), l.at(1) - off), redirect, dash: "dashed")
+    label((tx, l.at(1) - off - sp(2)), "north-west", [#step(4) `OK`])
 
     // Legend, beside group 0.
     let row = sp(8)
@@ -205,17 +212,24 @@ library, with no central master. @fig-topology shows the path of one request.
       stroke: thin + raft-ink), [Raft traffic])
     key(lx.at(1), ly, arrow((lx.at(1), ly), (lx.at(1) + 8, ly), accent), [Request])
     key(lx.at(1), ly - row, arrow((lx.at(1) + 8, ly - row), (lx.at(1), ly - row), redirect,
-      dash: "dashed"), [Redirect reply])
+      dash: "dashed"), [Reply])
+
+    // Walkthrough of the numbered steps, in the free space beside group 2.
+    content((0, top(2) - sp(3)), anchor: "north-west", box(width: (px - sp(8)) * 1mm, {
+      set text(fs)
+      set enum(numbering: n => step(n), spacing: 0.9em)
+      set par(justify: false)
+      enum(
+        [The library sends `Append(k, v)` to group 1.],
+        [A follower replies `NOT_LEADER` with a hint.],
+        [The library retries at the leader.],
+        [The leader serves it and replies `OK`.],
+      )
+    }))
   }),
   caption: [Backchannel topology, with the routing of one request.],
 ) <fig-topology>
 
-#block(breakable: false)[
-  #set enum(numbering: n => step(n))
-  + The library hashes the key to group 1 and sends `Append(k, v)` to a member, here a follower.
-  + The follower is not the leader, so it replies `NOT_LEADER` with the leader as a hint.
-  + The library retries at the leader and remembers it for later requests to the group.
-]
 
 == Concepts
 
