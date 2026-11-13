@@ -351,8 +351,8 @@ Keys are split across independent Raft groups with no central master, as @fig-to
 
 All modules are written in C++17.
 
-- *RPC layer.* Client and server stubs for every message, plus one listener per server that
-  dispatches by type: client operations to the request handler, Raft messages to the Raft server.
+- *RPC layer.* Client and server stubs for every message, one listener per server that dispatches
+  by type (client operations to the request handler, Raft messages to Raft), and fault injection.
 - *Raft server.* Elections (`RequestVote`), log replication (`AppendEntries`), commits, read index.
 - *Request handler.* Serves `Get` and `Append`, redirects followers' requests to the
   leader, rejects requests for other groups, and replies once an entry is applied.
