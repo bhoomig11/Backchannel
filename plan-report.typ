@@ -251,8 +251,8 @@ Keys are split across independent Raft groups with no central master, as @fig-to
   process, clients included, computes from its server list. The client library sends each request to the key's group: to
   the last leader it saw there, or else to any member.
 - Request fields: client id, sequence number, operation, key, value.
-- Reply fields: status, value, group id of the replying server, and a hint (a server id to retry
-  at).
+- Reply fields: client id, sequence number, status, value, group id of the replying server, and a
+  hint (a server id to retry at). The library discards a reply for any other sequence number.
 - Statuses:
   / `OK`: The operation succeeded.
   / `NOT_FOUND`: `Get` on a missing key.
@@ -307,7 +307,7 @@ Keys are split across independent Raft groups with no central master, as @fig-to
     msg(-7.2, 1, 2, [heartbeat])
     msg(-7.9, 2, 1, [ack])
     note(-8.6, 1, [still leader; wait until applied #sym.gt.eq readIndex])
-    msg(-9.3, 1, 0, [value])
+    msg(-9.3, 1, 0, [`OK`, value])
   }),
   caption: [Write and read paths in one shard group.],
 ) <fig-paths>
@@ -323,9 +323,11 @@ Keys are split across independent Raft groups with no central master, as @fig-to
 
 - As in Section 8 of the Raft paper @raft, requests and log entries carry (client id, sequence number).
 - The state machine's deduplication (dedup) table maps client id #sym.arrow.r (last applied seq, reply).
-- When a committed entry is applied, a duplicate is skipped and its stored reply returned.
-  Replicas apply the same log in order, so a new leader inherits the same table.
-- The leader replies to the client once the entry at its assigned index is applied.
+- When a committed entry is applied, a duplicate is skipped and its stored reply returned, and a
+  request older than the client's last applied one is ignored. Replicas apply the same log in
+  order, so a new leader inherits the same table.
+- The leader replies `OK` once the entry at the request's index is applied, if that entry is still
+  the request's own. Otherwise leadership changed, and it replies `NOT_LEADER`.
 
 == Persistence
 
