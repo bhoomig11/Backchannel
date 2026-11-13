@@ -353,20 +353,21 @@ Keys are split across independent Raft groups with no central master, as @fig-to
 
 == Modules
 
-All modules are written in C++17.
-
-- *RPC layer.* Client and server stubs for every message, one listener per server that dispatches
-  by type (client operations to the request handler, Raft messages to Raft), and fault injection.
-- *Raft server.* Elections (`RequestVote`), log replication (`AppendEntries`), commits, read index.
-- *Request handler.* Serves `Get` and `Append`, redirects followers' requests to the
-  leader, rejects requests for other groups, and replies once an entry is applied.
-- *State machine.* Applies committed entries to the key-value map and keeps the dedup table.
-- *Persistent log.* Stores Raft state durably and returns it on restart.
-- *Client library.* Offers `Get` and `Append`, routes by key, numbers requests, retries, follows hints.
+- *Store server.* One process per replica, built from five components:
+  - *RPC layer.* Message stubs, one listener that dispatches by type (client operations to the
+    request handler, Raft messages to Raft), and fault injection.
+  - *Raft.* Leader election, log replication and commits, plus the leadership check for reads.
+  - *Request handler.* Serves `Get` and `Append`, redirects followers' requests to the leader,
+    rejects requests for other groups, and replies once an entry is applied.
+  - *State machine.* Applies committed entries to the key-value map and dedup table.
+  - *Persistent log.* Stores Raft state durably and returns it on restart.
+- *Client library.* Linked into each chat server. Offers `Get` and `Append`, routes by key, numbers
+  requests, retries, follows hints.
 
 = Evaluation
 
-Each experiment runs 5 times on the Khoury Linux cluster, reporting medians and p99 latency. Runs
+Backchannel targets C++17, which g++ 8.5 on the Khoury Linux cluster supports. Each experiment runs 5 times on the cluster, reporting medians and p99 latency. Evaluation
+adds three tools: workload clients, an experiment driver and the history checker. Runs
 last at most a minute, all processes stop between runs, and only 3-group runs use 11 machines.
 
 == Setup
