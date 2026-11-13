@@ -235,27 +235,21 @@ library, with no central master. @fig-topology shows the path of one request.
   / `Get(k)`: Returns `k`'s value. Loads a channel's history.
 - A load returns the whole history; experiments keep histories short, so pagination is left for
   later.
+- Each key belongs to one shard group, chosen by a hash that spreads keys evenly and that every
+  process, clients included, computes from its server list. The client library sends each request to the key's group: to
+  the last leader it saw there, or else to any member.
 - Request fields: client id, sequence number, operation, key, value.
 - Reply fields: status, value, group id of the replying server, and a hint (a server id to retry
   at).
 - Statuses:
   / `OK`: The operation succeeded.
   / `NOT_FOUND`: `Get` on a missing key.
-  / `NOT_LEADER`: The server is a follower, and the hint names its leader.
-  / `WRONG_GROUP`: The key belongs to another group.
-- A request with no reply before the timeout is retried.
-
-== Routing
-
-- Each key belongs to one shard group, chosen by a hash of the key that spreads keys evenly
-  across groups. Every process, clients included, computes it the same way from the shared
-  config.
-- The client library sends a request to the owning group: to the last leader it saw there, or
-  else to any member. A follower replies `NOT_LEADER` with its current leader as the hint (or
-  none during an election). The client follows the hint, and on timeout retries the next
-  server of the group.
-- A server outside the owning group replies `WRONG_GROUP`. This only happens if a client's
-  config disagrees with the servers', so it fails fast instead of serving the wrong key.
+  / `NOT_LEADER`: The server is a follower or candidate, and the hint names the leader if known.
+    With no hint, the client waits one election timeout and tries another server.
+  / `WRONG_GROUP`: The key belongs to another group, so the client's server list is wrong. The
+    request fails fast instead of reading or writing the wrong key.
+- A request with no reply within the request timeout is retried at the group's next server.
+  After the retry cap, the library reports that it may or may not have taken effect.
 
 == Replication (per shard group)
 
@@ -334,9 +328,14 @@ library, with no central master. @fig-topology shows the path of one request.
 
 == Configuration and timing
 
-- The server list and the key-to-group map are fixed at startup. One config file, shared by all
-  processes, servers and clients alike, lists each server's id, group, host and port.
-- Election timeout randomized in 250--500 ms; heartbeat every 50 ms; client request timeout 1 s.
+- The server list and the key-to-group map are fixed at startup. Every process, server or
+  client, gets the same list of each server's id, group, host and port as command-line
+  arguments.
+- Timing:
+  / Election: 250--500 ms, randomized per server and term.
+  / Heartbeat: 50 ms between heartbeats from the leader.
+  / Request: 1 s before the client library retries a request.
+  / Retry cap: 10 s of retries before the library gives up on a request.
 
 = Modules
 
@@ -448,7 +447,7 @@ The first three weeks end on progress report dates; the last ends at the code an
   table.hline(),
   [*Week*], [*Team deliverable*],
   table.hline(stroke: 0.5pt),
-  [Nov 12--16], [Frozen message, log entry and config formats; leader election and in-memory
+  [Nov 12--16], [Frozen message, log entry and command-line formats; leader election and in-memory
     replication of `Append` in one shard group.],
   [Nov 17--23], [Persistence and crash recovery; exactly-once writes; linearizable `Get`;
     failover after a leader kill, tested on the cluster.],
