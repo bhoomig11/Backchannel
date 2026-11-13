@@ -364,79 +364,89 @@ All modules are written in C++17.
 
 = Evaluation
 
-== Setup on the Khoury cluster
+Each experiment runs 5 times on the Khoury Linux cluster, reporting medians and p99 latency. Runs
+last at most a minute, all processes stop between runs, and only 3-group runs use 11 machines.
 
-- Machines: linux-071 to linux-085 (15). Each server runs on its own machine: 3 groups #sym.times 3
-  replicas = 9 machines, plus 2 machines for clients. Ports are in 10000--65535.
-- Processes are started and killed over `ssh` (`kill -9` for crashes); logs live under `/tmp`
-  on each machine's local disk, since home directories are on NFS, shared by all machines.
-- Partitions are simulated in-process (no root access for firewall rules): a server told to
-  isolate itself drops all messages to and from its peers until told to stop.
-- Lost replies are simulated by a server option that drops a given fraction of client replies
-  after the request has been applied.
-- Every client records each operation's start time, end time, arguments and result. Servers'
-  clocks are not used.
-- *History checker.* Every appended message is a unique token (client id and sequence
-  number), so all reads of a channel must be prefixes of one message order. The checker
-  verifies, per channel: (1) every read is a prefix of the longest read; (2) a read includes
-  every append acknowledged before it started; (3) a read that started after another read
-  finished returns at least as much; (4) a read contains no message whose append started after
-  the read finished; (5) every message appears at most once, and every acknowledged message
-  appears.
-- Repeat each experiment 5 times and report medians, plus p99 for latency.
+== Setup
 
-== Replication and failover
+- *Placement:* One server per machine, 3 groups #sym.times 3 replicas, plus 2 machines for clients.
+- *Storage:* Logs live on local disks, not shared network storage, so groups never share a disk.
+- *Fault injection:* Faults live in each server's RPC layer, below the protocol, so Raft and the
+  request handler see real failures. An experiment driver sets them with control messages.
+  - *Crash:* The driver kills the process with no clean shutdown, then restarts it from its log.
+  - *Partition:* The message names peers to cut off, and the RPC layer drops all their traffic.
+  - *Reply loss:* The message sets a rate, and the RPC layer drops that share of client replies.
+  - *Healing:* A message with no peers and a zero rate clears both faults.
+- *Histories:* Clients log each operation's arguments, result, and start and end times.
+- *History checker:* Every message is a unique token (client id, sequence number), so all reads
+  of a channel must be prefixes of one message order. Per channel, the checker verifies:
+  + Every read is a prefix of the longest read.
+  + A read includes every append acknowledged before it started.
+  + A read that started after another read finished returns at least as much.
+  + A read contains no message whose append started after the read finished.
+  + Every message appears at most once, and every acknowledged message appears.
 
-- One group under steady update-heavy load; `kill -9` the leader. Measure the unavailability window: time
-  from the kill to the first completed write.
-- Expected: about one election timeout plus a round trip (under 1 s). Killing a follower
-  instead causes no gap.
-- Partition the leader from its followers: the old leader's writes never complete, and the
-  majority elects a new leader and continues.
-- Success: in every run the group recovers, and the checker finds every acknowledged message.
+#block(breakable: false)[
+== Experiment 1: Replication and failover
 
-== Crash recovery
+- One group under update-heavy load. Crash the leader, then in a separate run a follower, and
+  measure the unavailability window, from the crash to the first completed write.
+- Partition the leader from its followers for 10~s, then heal the partition.
+- *Expected:* A leader crash leaves a window under 1~s (one election timeout plus a round trip),
+  a follower crash none. A partitioned leader commits nothing while the majority elects another.
+- *Success:* In every run the group recovers, and the checker finds every acknowledged message.
+]
 
-- Kill one follower under load and restart it: it catches up, and after the load stops all
-  three replicas hold identical key-value maps (compared by hash).
-- Kill all three servers of a group at once and restart them: every acknowledged message is
-  still present.
-- Measure restart time against log length (10#super[4], 10#super[5], 10#super[6] entries).
-  Expected: linear growth, the cost of having no snapshots.
+#block(breakable: false)[
+== Experiment 2: Crash recovery
 
-== Exactly-once writes
+- Update-heavy mix. Crash one follower and restart it, then crash a whole group and restart it.
+- Measure restart time against log length (10#super[3], 10#super[4], 10#super[5] entries).
+- *Expected:* Restart time grows linearly with the log, the cost of having no snapshots.
+- *Success:* The restarted follower catches up, all replicas end with identical key-value maps,
+  and after the whole-group crash no acknowledged message is lost.
+]
 
-- Update-heavy mix, while servers drop 20% of replies and leaders are killed, so many
-  requests are retried.
-- Success: the checker finds no message twice.
-- Control: with the dedup check disabled, duplicates should appear.
+#block(breakable: false)[
+== Experiment 3: Exactly-once writes
 
-== Linearizable operations
+- Update-heavy mix while servers drop 20% of replies and a leader crashes every 10~s.
+- *Success:* The checker finds no message twice.
+- *Control:* With the dedup check disabled, duplicates should appear.
+]
 
-- Update-heavy mix, 10 clients on 3 channels (high contention), for 2 minutes, with a leader kill or partition
-  every 10 s. Run the checker over the history.
-- Success: no violations in any run.
-- Control: a variant where the leader serves `Get` from its local map without the read-index
-  round. With a partitioned old leader, the checker should report stale reads, showing it can
-  detect the failure it guards against.
+#block(breakable: false)[
+== Experiment 4: Linearizable operations
 
-== Sharding
+- Update-heavy mix, 10 clients on 3 channels, so reads and writes to a channel overlap,
+  for 1~minute, with a leader crash or partition every 10~s. Run the checker over the history.
+- *Success:* No violations in any run.
+- *Control:* The leader serves `Get` from its local map without the read-index round. With a
+  partitioned old leader, the checker should report stale reads, showing it can detect them.
+]
 
-- Read-mostly mix. Vary the number of shard groups from 1 to 3. For each, increase the number of clients until
-  throughput stops rising, and report peak throughput and the latency at that load.
-- Expected: near-linear scaling, since each group's leader is the bottleneck (with mostly
-  reads, its CPU and network for read-index rounds) and groups share nothing. Success: 3 groups
-  reach at least 2.5#sym.times the throughput of 1 group.
-- Correctness: each reply's group id matches the key's group, and histories pass the checker.
+#block(breakable: false)[
+== Experiment 5: Sharding
 
-== Batching (stretch)
+- Read-mostly mix. Vary the number of shard groups from 1 to 3. For each, add clients
+  until throughput stops rising, and report peak throughput and the latency at that load.
+- *Expected:* Near-linear scaling, since each group's leader is the bottleneck (for mostly reads,
+  its CPU and network for read-index rounds) and groups share nothing.
+- *Success:* 3 groups reach at least 2.5#sym.times the throughput of 1 group, each reply's group
+  id matches the key's group, and histories pass the checker.
+]
 
-- Repeat the 1-group throughput experiment with batching off and on, under the update-heavy
-  mix (batching only speeds up writes).
-- Expected: higher peak throughput with batching, since one disk write covers many entries;
-  latency at low load roughly unchanged. Rerun the linearizability experiment with batching on
-  to check it breaks nothing.
+#block(breakable: false)[
+== Experiment 6 (stretch): Batching
 
+- Repeat the 1-group run of Experiment 5 with batching off and on, under the update-heavy
+  mix, since batching only speeds up writes.
+- Rerun Experiment 4 with batching on.
+- *Expected:* Higher peak throughput with batching, and roughly unchanged latency at low load.
+- *Success:* Batching raises peak throughput, and the rerun of Experiment 4 finds no violations.
+]
+
+#block(breakable: false)[
 = Timeline
 
 The first three weeks end on progress report dates; the last ends at the code and report deadline.
@@ -458,6 +468,7 @@ The first three weeks end on progress report dates; the last ends at the code an
     instructions (due Dec 4); batching, if time allows.],
   table.hline(),
 )
+]
 
 = References
 
