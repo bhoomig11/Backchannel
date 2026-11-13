@@ -320,7 +320,7 @@ Keys are split across independent Raft groups with no central master, as @fig-to
 == Exactly-once writes
 
 - Each request carries (client id, sequence number), and log entries carry them too.
-- The state machine keeps a table: client id #sym.arrow.r (last applied sequence number, its reply).
+- The state machine's deduplication (dedup) table maps client id #sym.arrow.r (last applied seq, reply).
 - When a committed entry is applied, a duplicate is skipped and its stored reply returned.
   Every replica applies the same log in order, so all build the same table and a new leader
   has it.
