@@ -1,0 +1,10 @@
+BasedOnStyle: LLVM
+
+IndentWidth: 4
+IndentCaseLabels: true
+SortIncludes: false
+
+AlignConsecutiveMacros: true
+AlignAfterOpenBracket: BlockIndent
+BinPackParameters: false
+BinPackArguments: false
